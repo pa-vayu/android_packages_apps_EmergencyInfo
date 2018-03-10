@@ -17,6 +17,7 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_PACKAGE_NAME := EmergencyInfo
+LOCAL_PRIVATE_PLATFORM_APIS := true
 LOCAL_MODULE_TAGS := eng
 LOCAL_PROGUARD_FLAG_FILES := proguard.flags
 
@@ -29,7 +30,7 @@ LOCAL_STATIC_ANDROID_LIBRARIES := \
     android-support-v7-preference \
     android-support-v7-recyclerview \
     android-support-v4 \
-    android-support-design \
+    $(ANDROID_SUPPORT_DESIGN_TARGETS) \
     android-support-transition
 
 LOCAL_USE_AAPT2 := true
