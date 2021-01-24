@@ -18,17 +18,17 @@ package com.android.emergency.action;
 
 import static android.telecom.TelecomManager.EXTRA_CALL_SOURCE;
 
+import android.app.Activity;
 import android.content.Context;
-import android.media.AudioAttributes;
-import android.media.MediaPlayer;
+import android.content.Intent;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.CountDownTimer;
-import android.os.UserHandle;
-import android.provider.Settings;
 import android.support.v4.app.Fragment;
 import android.telecom.PhoneAccount;
 import android.telecom.TelecomManager;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -39,6 +39,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.android.emergency.R;
+import com.android.emergency.action.sensoryfeedback.EmergencyActionAlarmHelper;
+import com.android.emergency.action.service.EmergencyActionForegroundService;
 import com.android.emergency.widgets.countdown.CountDownAnimationView;
 import com.android.emergency.widgets.slider.OnSlideCompleteListener;
 import com.android.emergency.widgets.slider.SliderView;
@@ -51,15 +53,20 @@ public class EmergencyActionFragment extends Fragment implements OnSlideComplete
     private static final String TAG = "EmergencyActionFrag";
     private static final String STATE_MILLIS_LEFT = "STATE_MILLIS_LEFT";
 
-    private MediaPlayer mMediaPlayer;
+    private EmergencyActionAlarmHelper mEmergencyActionAlarmHelper;
     private TelecomManager mTelecomManager;
     private CountDownTimer mCountDownTimer;
     private EmergencyNumberUtils mEmergencyNumberUtils;
     private long mCountDownMillisLeft;
 
+    private boolean mCountdownCancelled;
+    private boolean mCountdownFinished;
+
     @Override
     public void onAttach(Context context) {
         super.onAttach(context);
+        EmergencyActionForegroundService.stopService(context);
+        mEmergencyActionAlarmHelper = new EmergencyActionAlarmHelper(context);
         mEmergencyNumberUtils = new EmergencyNumberUtils(context);
         mTelecomManager = context.getSystemService(TelecomManager.class);
     }
@@ -67,7 +74,21 @@ public class EmergencyActionFragment extends Fragment implements OnSlideComplete
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater,
             @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        View view = inflater.inflate(R.layout.emergency_action_fragment, container, false);
+
+        // Ignore the larger font scale if users set it in general system settings since we already
+        // have relatively large font size on this page, and we need to display all content on one
+        // page without scrolling.
+        Configuration configuration = getResources().getConfiguration();
+        if (configuration.fontScale > 1) {
+            configuration.fontScale = (float) 1;
+
+            DisplayMetrics metrics = new DisplayMetrics();
+            metrics.scaledDensity = configuration.fontScale * metrics.density;
+            configuration.densityDpi = (int) getResources().getDisplayMetrics().xdpi;
+        }
+
+        View view = inflater.cloneInContext(getContext().createConfigurationContext(configuration))
+                .inflate(R.layout.emergency_action_fragment, container, false);
 
         TextView subtitleView = view.findViewById(R.id.subtitle);
         subtitleView.setText(getString(R.string.emergency_action_subtitle,
@@ -79,8 +100,18 @@ public class EmergencyActionFragment extends Fragment implements OnSlideComplete
         if (savedInstanceState != null) {
             mCountDownMillisLeft = savedInstanceState.getLong(STATE_MILLIS_LEFT);
         } else {
-            mCountDownMillisLeft =
-                    getResources().getInteger(R.integer.emergency_action_count_down_millis);
+            Activity activity = getActivity();
+            Intent intent = null;
+            if (activity != null) {
+                intent = activity.getIntent();
+            }
+            if (intent != null) {
+                mCountDownMillisLeft = intent.getLongExtra(STATE_MILLIS_LEFT,
+                        getResources().getInteger(R.integer.emergency_action_count_down_millis));
+            } else {
+                mCountDownMillisLeft =
+                        getResources().getInteger(R.integer.emergency_action_count_down_millis);
+            }
         }
 
         return view;
@@ -90,7 +121,7 @@ public class EmergencyActionFragment extends Fragment implements OnSlideComplete
     public void onStart() {
         super.onStart();
         startTimer();
-        playWarningSound();
+        mEmergencyActionAlarmHelper.playWarningSound();
     }
 
     @Override
@@ -110,11 +141,25 @@ public class EmergencyActionFragment extends Fragment implements OnSlideComplete
             mCountDownTimer.cancel();
         }
 
-        stopWarningSound();
+        mEmergencyActionAlarmHelper.stopWarningSound();
+        if (!mCountdownCancelled && !mCountdownFinished) {
+            Log.d(TAG,
+                    "Emergency countdown UI dismissed without being cancelled/finished, "
+                            + "continuing countdown in background");
+
+            Context context = getContext();
+            context.startService(
+                    EmergencyActionForegroundService.newStartCountdownIntent(
+                            context,
+                            mCountDownMillisLeft,
+                            mEmergencyActionAlarmHelper.getUserSetAlarmVolume()));
+        }
     }
 
     @Override
     public void onSlideComplete() {
+        mCountdownCancelled = true;
+        EmergencyActionForegroundService.stopService(getActivity());
         getActivity().finish();
     }
 
@@ -145,6 +190,7 @@ public class EmergencyActionFragment extends Fragment implements OnSlideComplete
 
                     @Override
                     public void onFinish() {
+                        mCountdownFinished = true;
                         startEmergencyCall();
                         getActivity().finish();
                     }
@@ -156,45 +202,6 @@ public class EmergencyActionFragment extends Fragment implements OnSlideComplete
         countDownAnimationView.showCountDown();
     }
 
-    private boolean isPlayWarningSoundEnabled() {
-        return Settings.Secure.getIntForUser(getContext().getContentResolver(),
-                Settings.Secure.EMERGENCY_GESTURE_SOUND_ENABLED, 0, UserHandle.USER_CURRENT) != 0;
-    }
-
-    private void playWarningSound() {
-        if (!isPlayWarningSoundEnabled()) {
-            return;
-        }
-
-        if (mMediaPlayer == null) {
-            mMediaPlayer = MediaPlayer.create(
-                    getContext(),
-                    R.raw.alarm,
-                    new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build(),
-                    /* audioSessionId= */ 0);
-        }
-
-        mMediaPlayer.setOnCompletionListener(mp -> mp.release());
-        mMediaPlayer.setOnErrorListener(
-                (MediaPlayer mp, int what, int extra) -> {
-                    Log.w(TAG, "MediaPlayer playback failed with error code: " + what
-                            + ", and extra code: " + extra);
-                    mp.release();
-                    return false;
-                });
-
-        mMediaPlayer.start();
-    }
-
-    private void stopWarningSound() {
-        if (mMediaPlayer != null && mMediaPlayer.isPlaying()) {
-            mMediaPlayer.stop();
-            mMediaPlayer.release();
-        }
-    }
 
     private void startEmergencyCall() {
         Bundle extras = new Bundle();
