@@ -1,4 +1,4 @@
-// Copyright (C) 2017 The Android Open Source Project
+// Copyright (C) 2021 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package {
-    default_applicable_licenses: ["Android-Apache-2.0"],
-}
-
-android_robolectric_test {
-    name: "EmergencyInfoRoboTests",
+android_library {
+    name: "EmergencyGestureContentProvider",
     srcs: ["src/**/*.java"],
-    java_resource_dirs: ["config"],
-    static_libs: ["emergencyinfo-test-common"],
-    instrumentation_for: "EmergencyInfo",
+    platform_apis: true,
+    static_libs: [
+        "SettingsLibEmergencyNumber"
+    ],
 }

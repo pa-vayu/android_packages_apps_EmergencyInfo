@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 android_app {
     name: "EmergencyInfo",
     platform_apis: true,
@@ -23,7 +27,8 @@ android_app {
     required: ["privapp_whitelist_com.android.emergency"],
     privileged: true,
     static_libs: [
-        "EmergencyInfo-lib"
+        "EmergencyInfo-lib",
+        "EmergencyGestureContentProvider",
     ],
     certificate: "platform",
 }
